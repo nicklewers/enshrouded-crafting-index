@@ -7,8 +7,22 @@ import type { CraftingRecipe } from "@/app/types/items";
 type SortKey = "CraftedItem" | "Crafter" | "Workshop";
 type SortDir = "asc" | "desc";
 
+/** Expands short-key payload from copy-data.js into CraftingRecipe shape. */
+function expandItem(short: Record<string, unknown>): CraftingRecipe {
+  return {
+    CraftedItem: (short.n as string) ?? "",
+    Crafter: (short.c as string) ?? "",
+    Workshop: (short.w as string | null) ?? null,
+    Workshop2: (short.w2 as string | null) ?? null,
+    CraftedQuantity: (short.q as string) ?? "",
+    SourceItem: (short.s as string[]) ?? [],
+    SourceQuantity: (short.sq as number[]) ?? [],
+  };
+}
+
 function useItems() {
   const [items, setItems] = useState<CraftingRecipe[]>([]);
+  const [crafters, setCrafters] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,12 +34,26 @@ function useItems() {
         if (!r.ok) throw new Error(r.status === 404 ? "No data. Run npm run scrape and npm run build." : "Failed to load");
         return r.json();
       })
-      .then(setItems)
+      .then((data: unknown) => {
+        if (Array.isArray(data)) {
+          setItems(data as CraftingRecipe[]);
+          setCrafters(null);
+          return;
+        }
+        const payload = data as { crafters?: string[]; items?: Record<string, unknown>[] };
+        if (payload?.items) {
+          setItems(payload.items.map(expandItem));
+          setCrafters(payload.crafters ?? null);
+        } else {
+          setItems([]);
+          setCrafters(null);
+        }
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
-  return { items, loading, error };
+  return { items, crafters, loading, error };
 }
 
 function SearchInput({
@@ -104,10 +132,12 @@ function RecipeCard({ recipe }: { recipe: CraftingRecipe }) {
         <span className="text-sm text-[var(--muted)]">×{recipe.CraftedQuantity}</span>
       </div>
       <div className="mb-3 flex flex-wrap gap-2 text-sm">
-        <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)]">{recipe.Crafter}</span>
-        <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--muted)]">
-          {recipe.Workshop ?? "—"}
-        </span>
+        {recipe.Crafter ? (
+          <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)]">{recipe.Crafter}</span>
+        ) : null}
+        {recipe.Workshop ? (
+          <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--muted)]">{recipe.Workshop}</span>
+        ) : null}
       </div>
       <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Ingredients</p>
       <ul className="max-h-32 space-y-1 overflow-y-auto text-sm text-[var(--muted)]">
@@ -122,17 +152,18 @@ function RecipeCard({ recipe }: { recipe: CraftingRecipe }) {
 }
 
 export default function Home() {
-  const { items, loading, error } = useItems();
+  const { items, crafters: craftersFromData, loading, error } = useItems();
   const [query, setQuery] = useState("");
   const [crafterFilter, setCrafterFilter] = useState("All");
   const [sortKey, setSortKey] = useState<SortKey>("CraftedItem");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const crafterOptions = useMemo(() => {
+    if (craftersFromData?.length) return ["All", ...craftersFromData];
     const set = new Set<string>(["All"]);
     items.forEach((r) => r.Crafter && set.add(r.Crafter));
     return Array.from(set).sort((a, b) => (a === "All" ? -1 : b === "All" ? 1 : a.localeCompare(b)));
-  }, [items]);
+  }, [items, craftersFromData]);
 
   const fuse = useMemo(
     () =>

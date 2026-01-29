@@ -1,0 +1,15 @@
+{
+  "name": "enshrouded-wiki-scraper",
+  "version": "1.0.0",
+  "description": "Scrapes Crafted Items List JSON from enshrouded.wiki.gg",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "run": "node index.js",
+    "scrape": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

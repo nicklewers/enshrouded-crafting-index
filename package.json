@@ -1,0 +1,25 @@
+{
+  "name": "enshrouded-crafting-index",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/copy-data.js && next dev",
+    "build": "node scripts/copy-data.js && next build",
+    "build:gh": "node scripts/copy-data.js && NEXT_PUBLIC_BASE_PATH=/enshrouded-crafting-index next build",
+    "scrape": "node scraper/index.js"
+  },
+  "dependencies": {
+    "fuse.js": "^7.0.0",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.0"
+  }
+}

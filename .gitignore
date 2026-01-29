@@ -1,0 +1,24 @@
+# Scraped data (uncomment to commit latest for serverless)
+data/*.json
+
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+# public/items.json is committed by the update-data cron workflow
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo

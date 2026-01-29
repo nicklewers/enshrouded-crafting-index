@@ -52,10 +52,11 @@ const data = JSON.parse(raw);
 const items = Array.isArray(data) ? data : Object.values(data).flat();
 
 const crafters = [...new Set(items.map((r) => r.Crafter).filter(Boolean))].sort();
+const workshops = [...new Set(items.map((r) => r.Workshop).filter(Boolean))].sort();
 const sorted = [...items].sort((a, b) => (a.CraftedItem ?? "").localeCompare(b.CraftedItem ?? ""));
 const shortItems = sorted.map(shorten);
 
-const payload = { crafters, items: shortItems };
+const payload = { crafters, workshops, items: shortItems };
 fs.mkdirSync(publicDir, { recursive: true });
 fs.writeFileSync(outFile, JSON.stringify(payload), "utf8");
-console.log("[copy-data] wrote", outFile, "(minified, crafters + items, pre-sorted)");
+console.log("[copy-data] wrote", outFile, "(minified, crafters + workshops + items, pre-sorted)");

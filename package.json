@@ -1,8 +1,9 @@
 {
   "name": "enshrouded-crafting-index",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "node scripts/copy-data.js && next dev",
+    "dev": "node scripts/copy-data.js && next dev --turbopack",
     "build": "node scripts/copy-data.js && next build",
     "build:gh": "node scripts/copy-data.js && NEXT_PUBLIC_BASE_PATH=/enshrouded-crafting-index next build",
     "scrape": "node scraper/index.js"

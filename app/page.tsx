@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef, startTransition } from "react";
+import { useEffect, useMemo, useState, useCallback, startTransition } from "react";
 import Fuse from "fuse.js";
 import type { CraftingRecipe } from "@/app/types/items";
 
@@ -179,15 +179,11 @@ function InfoIcon({ className }: { className?: string }) {
 function RecipeCard({
   recipe,
   onCardClick,
-  onCrafterClick,
-  onWorkshopClick,
   onIngredientClick,
   craftableNames,
 }: {
   recipe: CraftingRecipe;
   onCardClick?: (recipe: CraftingRecipe) => void;
-  onCrafterClick?: (crafter: string) => void;
-  onWorkshopClick?: (workshop: string) => void;
   onIngredientClick?: (name: string, parentRecipe: CraftingRecipe) => void;
   craftableNames?: Set<string>;
 }) {
@@ -207,32 +203,18 @@ function RecipeCard({
           </span>
         )}
       </div>
-      <div className="mb-3 flex flex-wrap gap-2 text-sm">
+      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
         {recipe.Crafter ? (
-          onCrafterClick ? (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onCrafterClick(recipe.Crafter); }}
-              className="mr-2 rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)] hover:bg-[var(--accent-dim)] hover:text-white"
-            >
-              {recipe.Crafter}
-            </button>
-          ) : (
-            <span className="mr-2 rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)]">{recipe.Crafter}</span>
-          )
+          <span>
+            <span className="text-[var(--muted)]">Crafter: </span>
+            <span className="text-[var(--text)]">{recipe.Crafter}</span>
+          </span>
         ) : null}
         {recipe.Workshop ? (
-          onWorkshopClick ? (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onWorkshopClick(recipe.Workshop!); }}
-              className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--accent-dim)] hover:text-white"
-            >
-              {recipe.Workshop}
-            </button>
-          ) : (
-            <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--muted)]">{recipe.Workshop}</span>
-          )
+          <span>
+            <span className="text-[var(--muted)]">Workshop: </span>
+            <span className="text-[var(--text)]">{recipe.Workshop}</span>
+          </span>
         ) : null}
       </div>
       <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Ingredients</p>
@@ -396,11 +378,7 @@ function SidePanel({
         </div>
       </div>
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
-        <RecipeCard
-          recipe={current}
-          onIngredientClick={onIngredientClick}
-          craftableNames={craftableNames}
-        />
+        <RecipeCard recipe={current} onIngredientClick={onIngredientClick} craftableNames={craftableNames} />
         {showObtaining && (
           <ObtainingBlock
             itemName={current.CraftedItem}
@@ -423,7 +401,6 @@ export default function Home() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [panelStack, setPanelStack] = useState<CraftingRecipe[]>([]);
   const [obtainingByItem, setObtainingByItem] = useState<Record<string, ObtainingState>>({});
-  const filterSectionRef = useRef<HTMLDivElement>(null);
 
   const fetchObtaining = useCallback((itemName: string) => {
     startTransition(() => {
@@ -502,20 +479,6 @@ export default function Home() {
     return list;
   }, [items, query, fuse, crafterFilter, workshopFilter, sortKey, sortDir]);
 
-  const handleCrafterClick = useCallback((crafter: string) => {
-    setCrafterFilter(crafter);
-    setWorkshopFilter("All");
-    setQuery("");
-    filterSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
-
-  const handleWorkshopClick = useCallback((workshop: string) => {
-    setWorkshopFilter(workshop);
-    setCrafterFilter("All");
-    setQuery("");
-    filterSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
-
   const openIngredient = useCallback(
     (name: string, parentRecipe?: CraftingRecipe) => {
       const recipe = craftableByName.get(name);
@@ -569,7 +532,7 @@ export default function Home() {
         </p>
       </header>
 
-      <div ref={filterSectionRef} className="mb-6 space-y-4">
+      <div className="mb-6 space-y-4">
         <SearchInput value={query} onChange={setQuery} />
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
@@ -633,8 +596,6 @@ export default function Home() {
             key={`${recipe.CraftedItem}-${recipe.Crafter}-${i}`}
             recipe={recipe}
             onCardClick={handleCardClick}
-            onCrafterClick={handleCrafterClick}
-            onWorkshopClick={handleWorkshopClick}
             onIngredientClick={openIngredient}
             craftableNames={craftableNames}
           />

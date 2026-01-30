@@ -1,11 +1,75 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, startTransition } from "react";
 import Fuse from "fuse.js";
 import type { CraftingRecipe } from "@/app/types/items";
 
 type SortKey = "CraftedItem" | "Crafter" | "Workshop";
 type SortDir = "asc" | "desc";
+
+const WIKI_API = "https://enshrouded.wiki.gg/api.php";
+
+type ObtainingState = { text: string } | "loading" | { error: string } | { noSection: true };
+
+/** True if element is a heading (H1–H6). */
+function isHeading(el: Element): boolean {
+  return /^H[1-6]$/.test(el.tagName);
+}
+
+/** Strip to only the Obtaining intro: find Obtaining heading, take content until next heading (any level), plain text. */
+function stripObtainingToPlainText(html: string): string {
+  if (typeof document === "undefined") return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const root = doc.body.querySelector(".mw-parser-output") ?? doc.body;
+  const obtainingHeadline =
+    root.querySelector("#Obtaining") ?? root.querySelector('span.mw-headline[id="Obtaining"]');
+  if (!obtainingHeadline) {
+    const firstHeading = root.querySelector("h1, h2, h3, h4, h5, h6");
+    if (firstHeading) {
+      const parts: string[] = [];
+      let el: Element | null = firstHeading.nextElementSibling;
+      while (el && !isHeading(el)) {
+        const text = (el as HTMLElement).innerText?.trim();
+        if (text) parts.push(text);
+        el = el.nextElementSibling;
+      }
+      return parts.join("\n\n").replace(/\n{2,}/g, "\n\n").trim();
+    }
+    return "";
+  }
+  const h2 = obtainingHeadline.closest("h2");
+  if (!h2) return "";
+  const parts: string[] = [];
+  let el: Element | null = h2.nextElementSibling;
+  while (el && !isHeading(el)) {
+    const text = (el as HTMLElement).innerText?.trim();
+    if (text) parts.push(text);
+    el = el.nextElementSibling;
+  }
+  return parts.join("\n\n").replace(/\n{2,}/g, "\n\n").trim();
+}
+
+/** Fetch "Obtaining" section if it exists. Returns null when the page has no Obtaining section (e.g. craft-only). */
+async function fetchObtainingSection(itemName: string): Promise<string | null> {
+  const pageName = itemName.replace(/\s+/g, "_");
+  const sectionsUrl = `${WIKI_API}?${new URLSearchParams({ action: "parse", page: pageName, prop: "sections", format: "json", origin: "*" })}`;
+  const sectionsRes = await fetch(sectionsUrl);
+  if (!sectionsRes.ok) throw new Error(`Sections: ${sectionsRes.status}`);
+  const sectionsData = await sectionsRes.json();
+  if (sectionsData.error) throw new Error(sectionsData.error.info || sectionsData.error.code);
+  const sections: { line?: string; index?: string }[] = sectionsData.parse?.sections ?? [];
+  const obtaining = sections.find((s) => (s.line ?? "").toLowerCase() === "obtaining");
+  if (!obtaining) return null;
+  const sectionIndex = obtaining.index ?? "0";
+  const textUrl = `${WIKI_API}?${new URLSearchParams({ action: "parse", page: pageName, prop: "text", section: sectionIndex, format: "json", origin: "*" })}`;
+  const textRes = await fetch(textUrl);
+  if (!textRes.ok) throw new Error(`Text: ${textRes.status}`);
+  const textData = await textRes.json();
+  if (textData.error) throw new Error(textData.error.info || textData.error.code);
+  const html = textData.parse?.text?.["*"];
+  if (typeof html !== "string") throw new Error("No content");
+  return html;
+}
 
 /** Expands short-key payload from copy-data.js into CraftingRecipe shape. */
 function expandItem(short: Record<string, unknown>): CraftingRecipe {
@@ -93,47 +157,38 @@ function SearchInput({
   );
 }
 
-function CategoryPills({
-  options,
-  selected,
-  onSelect,
-}: {
-  options: string[];
-  selected: string;
-  onSelect: (v: string) => void;
-}) {
+function InfoIcon({ className }: { className?: string }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          onClick={() => onSelect(opt)}
-          className={
-            "rounded-full px-3 py-1 text-sm font-medium transition-colors " +
-            (selected === opt
-              ? "bg-[var(--accent)] text-white"
-              : "bg-[var(--surface)] text-[var(--muted)] hover:bg-[var(--border)] hover:text-[var(--text)]")
-          }
-        >
-          {opt}
-        </button>
-      ))}
-    </div>
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4M12 8h.01" />
+    </svg>
   );
 }
 
 function RecipeCard({
   recipe,
+  onCardClick,
   onCrafterClick,
   onWorkshopClick,
   onIngredientClick,
   craftableNames,
 }: {
   recipe: CraftingRecipe;
+  onCardClick?: (recipe: CraftingRecipe) => void;
   onCrafterClick?: (crafter: string) => void;
   onWorkshopClick?: (workshop: string) => void;
-  onIngredientClick?: (name: string) => void;
+  onIngredientClick?: (name: string, parentRecipe: CraftingRecipe) => void;
   craftableNames?: Set<string>;
 }) {
   const ingredients = recipe.SourceItem.map((name, i) => ({
@@ -141,31 +196,36 @@ function RecipeCard({
     qty: recipe.SourceQuantity[i] ?? 1,
   }));
 
-  return (
-    <article className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm transition hover:border-[var(--accent-dim)]">
+  const content = (
+    <>
       <div className="mb-2 flex flex-wrap items-baseline gap-2">
         <h2 className="text-lg font-semibold text-[var(--text)]">{recipe.CraftedItem}</h2>
         <span className="text-sm text-[var(--muted)]">×{recipe.CraftedQuantity}</span>
+        {onCardClick && (
+          <span className="ml-auto text-[var(--muted)] opacity-70" aria-hidden>
+            <InfoIcon className="h-4 w-4" />
+          </span>
+        )}
       </div>
       <div className="mb-3 flex flex-wrap gap-2 text-sm">
         {recipe.Crafter ? (
           onCrafterClick ? (
             <button
               type="button"
-              onClick={() => onCrafterClick(recipe.Crafter)}
-              className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)] hover:bg-[var(--accent-dim)] hover:text-white"
+              onClick={(e) => { e.stopPropagation(); onCrafterClick(recipe.Crafter); }}
+              className="mr-2 rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)] hover:bg-[var(--accent-dim)] hover:text-white"
             >
               {recipe.Crafter}
             </button>
           ) : (
-            <span className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)]">{recipe.Crafter}</span>
+            <span className="mr-2 rounded bg-[var(--border)] px-2 py-0.5 text-[var(--text)]">{recipe.Crafter}</span>
           )
         ) : null}
         {recipe.Workshop ? (
           onWorkshopClick ? (
             <button
               type="button"
-              onClick={() => onWorkshopClick(recipe.Workshop!)}
+              onClick={(e) => { e.stopPropagation(); onWorkshopClick(recipe.Workshop!); }}
               className="rounded bg-[var(--border)] px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--accent-dim)] hover:text-white"
             >
               {recipe.Workshop}
@@ -184,7 +244,7 @@ function RecipeCard({
               {isCraftable ? (
                 <button
                   type="button"
-                  onClick={() => onIngredientClick(ing.name)}
+                  onClick={(e) => { e.stopPropagation(); onIngredientClick(ing.name, recipe); }}
                   className="text-left text-[var(--accent)] hover:underline"
                 >
                   {ing.name} ×{ing.qty}
@@ -196,26 +256,104 @@ function RecipeCard({
           );
         })}
       </ul>
+    </>
+  );
+
+  if (onCardClick) {
+    const openPanel = () => onCardClick(recipe);
+    return (
+      <article
+        role="button"
+        tabIndex={0}
+        onClick={openPanel}
+        onPointerDown={(e) => {
+          if (e.pointerType === "touch") {
+            openPanel();
+            if (!(e.target as Element).closest("button")) e.preventDefault();
+          }
+        }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPanel(); } }}
+        className="cursor-pointer rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:border-[var(--accent-dim)] hover:bg-[var(--surface)]/95 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+      >
+        {content}
+      </article>
+    );
+  }
+
+  return (
+    <article className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm transition hover:border-[var(--accent-dim)]">
+      {content}
     </article>
   );
+}
+
+function ObtainingBlock({
+  itemName,
+  state,
+  onRetry,
+}: {
+  itemName: string;
+  state: ObtainingState | undefined;
+  onLoad: (itemName: string) => void;
+  onRetry: (itemName: string) => void;
+}) {
+  if (typeof state === "object" && state && "error" in state) {
+    return (
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
+        <p className="text-[var(--muted)]">{state.error}</p>
+        <button
+          type="button"
+          onClick={() => onRetry(itemName)}
+          className="mt-2 text-xs text-[var(--accent)] hover:underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (typeof state === "object" && state && "text" in state) {
+    return (
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Obtaining</p>
+        <div className="max-h-40 overflow-y-auto whitespace-pre-line text-sm text-[var(--text)]">
+          {state.text}
+        </div>
+      </div>
+    );
+  }
+  return null;
 }
 
 function SidePanel({
   stack,
   craftableByName,
+  obtainingByItem,
   onIngredientClick,
+  onFetchObtaining,
   onPopToIndex,
   onClose,
 }: {
   stack: CraftingRecipe[];
   craftableByName: Map<string, CraftingRecipe>;
-  onIngredientClick: (name: string) => void;
+  obtainingByItem: Record<string, ObtainingState>;
+  onIngredientClick: (name: string, parentRecipe: CraftingRecipe) => void;
+  onFetchObtaining: (itemName: string) => void;
   onPopToIndex: (index: number) => void;
   onClose: () => void;
 }) {
   if (stack.length === 0) return null;
   const current = stack[stack.length - 1];
   const craftableNames = useMemo(() => new Set(craftableByName.keys()), [craftableByName]);
+  const obtainingState = obtainingByItem[current.CraftedItem];
+
+  useEffect(() => {
+    if (obtainingState === undefined) onFetchObtaining(current.CraftedItem);
+  }, [current.CraftedItem, obtainingState, onFetchObtaining]);
+
+  const showObtaining =
+    obtainingState &&
+    typeof obtainingState === "object" &&
+    ("text" in obtainingState || "error" in obtainingState);
 
   return (
     <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border)] bg-[var(--bg)] shadow-xl">
@@ -257,12 +395,20 @@ function SidePanel({
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
         <RecipeCard
           recipe={current}
           onIngredientClick={onIngredientClick}
           craftableNames={craftableNames}
         />
+        {showObtaining && (
+          <ObtainingBlock
+            itemName={current.CraftedItem}
+            state={obtainingState}
+            onLoad={onFetchObtaining}
+            onRetry={onFetchObtaining}
+          />
+        )}
       </div>
     </div>
   );
@@ -276,7 +422,39 @@ export default function Home() {
   const [sortKey, setSortKey] = useState<SortKey>("CraftedItem");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [panelStack, setPanelStack] = useState<CraftingRecipe[]>([]);
+  const [obtainingByItem, setObtainingByItem] = useState<Record<string, ObtainingState>>({});
   const filterSectionRef = useRef<HTMLDivElement>(null);
+
+  const fetchObtaining = useCallback((itemName: string) => {
+    startTransition(() => {
+      setObtainingByItem((prev) => {
+        const cur = prev[itemName];
+        if (cur === "loading") return prev;
+        if (cur && ("text" in cur || "noSection" in cur)) return prev;
+        return { ...prev, [itemName]: "loading" };
+      });
+    });
+    fetchObtainingSection(itemName)
+      .then((html) => {
+        if (html === null) {
+          return setObtainingByItem((prev) => ({ ...prev, [itemName]: { noSection: true as const } }));
+        }
+        const text = stripObtainingToPlainText(html);
+        setObtainingByItem((prev) => ({
+          ...prev,
+          [itemName]: text.trim() ? { text } : { noSection: true as const },
+        }));
+      })
+      .catch((e) => setObtainingByItem((prev) => ({ ...prev, [itemName]: { error: String(e) } })));
+  }, []);
+
+  const handleCardClick = useCallback(
+    (recipe: CraftingRecipe) => {
+      setPanelStack([recipe]);
+      fetchObtaining(recipe.CraftedItem);
+    },
+    [fetchObtaining]
+  );
 
   const crafterOptions = useMemo(() => {
     if (craftersFromData?.length) return ["All", ...craftersFromData];
@@ -339,11 +517,16 @@ export default function Home() {
   }, []);
 
   const openIngredient = useCallback(
-    (name: string) => {
+    (name: string, parentRecipe?: CraftingRecipe) => {
       const recipe = craftableByName.get(name);
-      if (recipe) setPanelStack((prev) => [...prev, recipe]);
+      if (!recipe) return;
+      setPanelStack((prev) => {
+        if (parentRecipe && prev.length === 0) return [parentRecipe, recipe];
+        return [...prev, recipe];
+      });
+      fetchObtaining(name);
     },
-    [craftableByName]
+    [craftableByName, fetchObtaining]
   );
 
   const popToIndex = useCallback((index: number) => {
@@ -388,17 +571,37 @@ export default function Home() {
 
       <div ref={filterSectionRef} className="mb-6 space-y-4">
         <SearchInput value={query} onChange={setQuery} />
-        <div>
-          <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Crafter
-          </span>
-          <CategoryPills options={crafterOptions} selected={crafterFilter} onSelect={setCrafterFilter} />
-        </div>
-        <div>
-          <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Workshop
-          </span>
-          <CategoryPills options={workshopOptions} selected={workshopFilter} onSelect={setWorkshopFilter} />
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            <span className="shrink-0">Crafter</span>
+            <select
+              value={crafterFilter}
+              onChange={(e) => setCrafterFilter(e.target.value)}
+              className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              aria-label="Filter by crafter"
+            >
+              {crafterOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            <span className="shrink-0">Workshop</span>
+            <select
+              value={workshopFilter}
+              onChange={(e) => setWorkshopFilter(e.target.value)}
+              className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              aria-label="Filter by workshop"
+            >
+              {workshopOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 
@@ -429,6 +632,7 @@ export default function Home() {
           <RecipeCard
             key={`${recipe.CraftedItem}-${recipe.Crafter}-${i}`}
             recipe={recipe}
+            onCardClick={handleCardClick}
             onCrafterClick={handleCrafterClick}
             onWorkshopClick={handleWorkshopClick}
             onIngredientClick={openIngredient}
@@ -451,7 +655,9 @@ export default function Home() {
           <SidePanel
             stack={panelStack}
             craftableByName={craftableByName}
+            obtainingByItem={obtainingByItem}
             onIngredientClick={openIngredient}
+            onFetchObtaining={fetchObtaining}
             onPopToIndex={popToIndex}
             onClose={closePanel}
           />
